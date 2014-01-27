@@ -5,11 +5,8 @@ from types import MethodType
 from django.db.models.fields import FieldDoesNotExist
 from django.utils.text import capfirst
 from django.db.models.options import get_verbose_name
-from django.utils.functional import LazyObject
-from django.conf import settings
 
 from mongoengine.fields import ReferenceField, ListField
-
 
 def patch_document(function, instance, bound=True):
     if bound:
@@ -18,95 +15,50 @@ def patch_document(function, instance, bound=True):
         method = function
     setattr(instance, function.__name__, method)
 
-
 def create_verbose_name(name):
     name = get_verbose_name(name)
     name = name.replace('_', ' ')
     return name
-
-
+    
 class Relation(object):
     # just an empty dict to make it useable with Django
     # mongoengine has no notion of this
     limit_choices_to = {}
-
     def __init__(self, to):
         self._to = to
-
-    @property
+    
+    @property    
     def to(self):
-        if not isinstance(self._to._meta, (DocumentMetaWrapper, LazyDocumentMetaWrapper)):
+        if not isinstance(self._to._meta, DocumentMetaWrapper):
             self._to._meta = DocumentMetaWrapper(self._to)
         return self._to
-
+        
     @to.setter
     def to(self, value):
         self._to = value
 
-
 class PkWrapper(object):
-    editable = False
-    fake = False
-    
     def __init__(self, wrapped):
         self.obj = wrapped
-
+    
     def __getattr__(self, attr):
         if attr in dir(self.obj):
             return getattr(self.obj, attr)
         raise AttributeError
-
+        
     def __setattr__(self, attr, value):
         if attr != 'obj' and hasattr(self.obj, attr):
             setattr(self.obj, attr, value)
-        super(PkWrapper, self).__setattr__(attr, value)
-
-
-class LazyDocumentMetaWrapper(LazyObject):
-    _document = None
-    _meta = None
-    
-    def __init__(self, document):
-        self._document = document
-        self._meta = document._meta
-        super(LazyDocumentMetaWrapper, self).__init__()
+        super(PkWrapper, self).__setattr__(attr, value)    
         
-    def _setup(self):
-        self._wrapped = DocumentMetaWrapper(self._document, self._meta)
-        
-    def __setattr__(self, name, value):
-        if name in ["_document", "_meta",]:
-            object.__setattr__(self, name, value)
-        else:
-            super(LazyDocumentMetaWrapper, self).__setattr__(name, value)
-    
-    def __dir__(self):
-        return self._wrapped.__dir__()
-    
-    def __getitem__(self, key):
-        return self._wrapped.__getitem__(key)
-    
-    def __setitem__(self, key, value):
-        return self._wrapped.__getitem__(key, value)
-        
-    def __delitem__(self, key):
-        return self._wrapped.__delitem__(key)
-        
-    def __len__(self):
-        return self._wrapped.__len__()
-        
-    def __contains__(self, key):
-        return self._wrapped.__contains__(key)
-        
-
 class DocumentMetaWrapper(MutableMapping):
     """
     Used to store mongoengine's _meta dict to make the document admin
-    as compatible as possible to django's meta class on models.
+    as compatible as possible to django's meta class on models. 
     """
     # attributes Django deprecated. Not really sure when to remove them
     _deprecated_attrs = {'module_name': 'model_name'}
-
+    
     pk = None
     pk_name = None
     _app_label = None
@@ -122,38 +74,35 @@ class DocumentMetaWrapper(MutableMapping):
     _meta = None
     concrete_model = None
     concrete_managers = []
-    virtual_fields = []
-    auto_created = False
-
-    def __init__(self, document, meta=None):
+    
+    def __init__(self, document):
+        #if isinstance(document._meta, DocumentMetaWrapper):
+        #    return
+        
         super(DocumentMetaWrapper, self).__init__()
-
+        
         self.document = document
         # used by Django to distinguish between abstract and concrete models
         # here for now always the document
         self.concrete_model = document
-        if meta is None:
-            meta = getattr(document, '_meta', {})
-            if isinstance(meta, LazyDocumentMetaWrapper):
-                meta = meta._meta
-        self._meta = meta
-
+        self._meta = getattr(document, '_meta', {})
+        
         try:
             self.object_name = self.document.__name__
         except AttributeError:
             self.object_name = self.document.__class__.__name__
-
+        
         self.model_name = self.object_name.lower()
-
+        
         # add the gluey stuff to the document and it's fields to make
         # everything play nice with Django
         self._setup_document_fields()
         # Setup self.pk if the document has an id_field in it's meta
         # if it doesn't have one it's an embedded document
-        #if 'id_field' in self._meta:
-        #    self.pk_name = self._meta['id_field']
-        self._init_pk()
-
+        if 'id_field' in self._meta:
+            self.pk_name = self._meta['id_field']
+            self._init_pk()
+            
     def _setup_document_fields(self):
         for f in self.document._fields.values():
             # Yay, more glue. Django expects fields to have a couple attributes
@@ -162,8 +111,7 @@ class DocumentMetaWrapper(MutableMapping):
                 # need a bit more for actual reference fields here
                 if isinstance(f, ReferenceField):
                     f.rel = Relation(f.document_type)
-                elif isinstance(f, ListField) and \
-                        isinstance(f.field, ReferenceField):
+                elif isinstance(f, ListField) and isinstance(f.field, ReferenceField):
                     f.field.rel = Relation(f.field.document_type)
                 else:
                     f.rel = None
@@ -176,41 +124,28 @@ class DocumentMetaWrapper(MutableMapping):
                         if isinstance(value, (list, tuple)):
                             flat.extend(value)
                         else:
-                            flat.append((choice, value))
+                            flat.append((choice,value))
                 f.flatchoices = flat
-            if isinstance(f, ReferenceField) and not \
-                    isinstance(f.document_type._meta, (DocumentMetaWrapper, LazyDocumentMetaWrapper)) and \
-                    self.document != f.document_type:
-                f.document_type._meta = LazyDocumentMetaWrapper(f.document_type)
-
+            if isinstance(f, ReferenceField) and not isinstance(f.document_type._meta, DocumentMetaWrapper) \
+                        and self.document != f.document_type:
+                f.document_type._meta = DocumentMetaWrapper(f.document_type)
+                    
     def _init_pk(self):
         """
-        Adds a wrapper around the documents pk field. The wrapper object gets
-        the attributes django expects on the pk field, like name and attname.
+        Adds a wrapper around the documents pk field. The wrapper object gets the attributes
+        django expects on the pk field, like name and attname.
 
         The function also adds a _get_pk_val method to the document.
         """
-        if 'id_field' in self._meta:
-            self.pk_name = self._meta['id_field']
-            pk_field = getattr(self.document, self.pk_name)
-        else:
-            pk_field = None
+        pk_field = getattr(self.document, self.pk_name)
         self.pk = PkWrapper(pk_field)
+        self.pk.name = self.pk_name
+        self.pk.attname = self.pk_name
 
+        self.document._pk_val = pk_field
         def _get_pk_val(self):
             return self._pk_val
-        
-        if pk_field is not None:
-            self.pk.name = self.pk_name
-            self.pk.attname = self.pk_name
-            self.document._pk_val = pk_field
-            patch_document(_get_pk_val, self.document)
-        else:
-            self.pk.fake = True
-            # this is used in the admin and used to determine if the admin
-            # needs to add a hidden pk field. It does not for embedded fields.
-            # So we pretend to have an editable pk field and just ignore it otherwise
-            self.pk.editable = True
+        patch_document(_get_pk_val, self.document)
     
     @property
     def app_label(self):
@@ -224,8 +159,8 @@ class DocumentMetaWrapper(MutableMapping):
         """
         Returns the verbose name of the document.
         
-        Checks the original meta dict first. If it is not found
-        then generates a verbose name from the object name.
+        Checks the original meta dict first. If it is not found 
+        then generates a verbose name from from the object name.
         """
         if self._verbose_name is None:
             verbose_name = self._meta.get('verbose_name', self.object_name)
@@ -269,8 +204,8 @@ class DocumentMetaWrapper(MutableMapping):
             else:
                 return (field, None, True, False)
         else:
-            raise FieldDoesNotExist('%s has no field named %r' %
-                                    (self.object_name, name))
+            raise FieldDoesNotExist('%s has no field named %r'
+                    % (self.object_name, name))
          
     def get_field(self, name, many_to_many=True):
         """
@@ -287,9 +222,9 @@ class DocumentMetaWrapper(MutableMapping):
         For historical reasons, model name lookups using get_model() are
         case insensitive, so we make sure we are case insensitive here.
         
-        NOTE: Not sure this is actually usefull for documents. So at the
-        moment it's really only here because the admin wants it. It might
-        prove usefull for someone though, so it's more then just a dummy.
+        NOTE: Not sure this is actually usefull for documents. So at the moment
+        it's really only here because the admin wants it. It might prove usefull
+        for someone though, so it'S more then just a dummy.
         """
         if self._meta.get('swappable', False):
             model_label = '%s.%s' % (self.app_label, self.object_name.lower())
@@ -300,12 +235,11 @@ class DocumentMetaWrapper(MutableMapping):
                 except ValueError:
                     # setting not in the format app_label.model_name
                     # raising ImproperlyConfigured here causes problems with
-                    # test cleanup code - instead it is raised in
-                    # get_user_model or as part of validation.
+                    # test cleanup code - instead it is raised in get_user_model
+                    # or as part of validation.
                     return swapped_for
 
-                if '%s.%s' % (swapped_label, swapped_object.lower()) \
-                        not in (None, model_label):
+                if '%s.%s' % (swapped_label, swapped_object.lower()) not in (None, model_label):
                     return swapped_for
         return None
     
@@ -324,7 +258,7 @@ class DocumentMetaWrapper(MutableMapping):
         else:
             super(DocumentMetaWrapper, self).__setattr__(name, value)
     
-    def __contains__(self, key):
+    def __contains__(self,key):
         return key in self._meta
     
     def __getitem__(self, key):
