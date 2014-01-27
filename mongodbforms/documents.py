@@ -159,15 +159,15 @@ def save_instance(form, instance, fields=None, fail_message='saved',
     
     if commit and hasattr(instance, 'save'):
         # see BaseDocumentForm._post_clean for an explanation
-        if len(form._meta._dont_save) > 0:
-            data = instance._data
-            new_data = dict([(n, f) for n, f in data.items() if not n in form._meta._dont_save])
-            instance._data = new_data
-            instance.save()
-            instance._data = data
-        else:
-            instance.save()
-        
+        #if len(form._meta._dont_save) > 0:
+        #    data = instance._data
+        #    new_data = dict([(n, f) for n, f in data.items() if not n \
+        #                    in form._meta._dont_save])
+        #    instance._data = new_data
+        #    instance.save()
+        #    instance._data = data
+        #else:
+        instance.save()
     return instance
 
 def document_to_dict(instance, fields=None, exclude=None):
